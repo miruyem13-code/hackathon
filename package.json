@@ -1,12 +1,36 @@
 {
-  "name": "ilmora", "version": "1.0.0", "private": true,
+  "name": "ilmora",
+  "version": "1.0.0",
+  "private": true,
   "scripts": {
     "smoke": "node scripts/smoke.mjs",
-    "setup": "node scripts/setup.mjs", "dev": "next dev --hostname 127.0.0.1", "build": "next build", "start": "next start --hostname 127.0.0.1",
-    "db:migrate": "tsx scripts/migrate.ts", "db:seed": "tsx scripts/seed.ts", "admin:create": "tsx scripts/create-admin.ts",
-    "test": "node --require ./scripts/os-userinfo-fallback.cjs --import tsx --test tests/*.test.ts", "typecheck": "tsc --noEmit", "test:e2e": "playwright test"
+    "setup": "node scripts/setup.mjs",
+    "dev": "next dev --hostname 127.0.0.1",
+    "build": "next build",
+    "start": "next start --hostname 127.0.0.1",
+    "db:migrate": "tsx scripts/migrate.ts",
+    "db:seed": "tsx scripts/seed.ts",
+    "admin:create": "tsx scripts/create-admin.ts",
+    "test": "node --require ./scripts/os-userinfo-fallback.cjs --import tsx --test tests/*.test.ts",
+    "typecheck": "tsc --noEmit",
+    "test:e2e": "playwright test"
   },
-  "dependencies": { "next": "^16.0.0", "react": "^19.2.0", "react-dom": "^19.2.0" },
-  "devDependencies": { "@tailwindcss/postcss": "^4.1.0", "tailwindcss": "^4.1.0", "@types/node": "^24.0.0", "@types/react": "^19.2.0", "@types/react-dom": "^19.2.0", "typescript": "^5.9.0", "tsx": "^4.20.0", "@playwright/test": "^1.56.0" },
-  "engines": { "node": ">=24.0.0" }
+  "dependencies": {
+    "next": "^16.0.0",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.56.0",
+    "@tailwindcss/postcss": "^4.1.0",
+    "@types/node": "^24.0.0",
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0",
+    "tailwindcss": "^4.1.0",
+    "tsx": "^4.20.0",
+    "typescript": "^5.9.0"
+  },
+  "engines": {
+    "node": ">=24.0.0"
+  }
 }

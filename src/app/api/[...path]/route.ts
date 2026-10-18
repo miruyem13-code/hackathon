@@ -8,24 +8,7 @@ export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 type Context = { params: Promise<{ path: string[] }> };
 const json = (data: unknown, status = 200) => NextResponse.json(data, { status, headers: { 'Cache-Control': 'no-store' } });
-type TutorSlide = { title:string; body:string; example?:string; prompt?:string; section?:string };
-function localTutorAnswer(action:string, question:string, lesson:any, slides:TutorSlide[], mistakes:string) {
-  const terms=(question.toLocaleLowerCase().match(/[\p{L}\p{N}]+/gu)||[]).filter(word=>word.length>2&&!['qanday','qaysi','nima','nega','menga','iltimos','haqida','bilan','uchun'].includes(word));
-  const ranked=slides.map(slide=>({slide,score:terms.reduce((score,term)=>score+(`${slide.title} ${slide.body} ${slide.example||''} ${slide.prompt||''}`.toLocaleLowerCase().includes(term)?1:0),0)})).sort((a,b)=>b.score-a.score);
-  const slideIndex=action==='quiz'?Math.min(3,slides.length-1):['example','steps'].includes(action)?Math.min(2,slides.length-1):0;
-  const focused=action==='ask'&&ranked[0]?.score>0?ranked[0].slide:null;
-  const slide=focused||(slides[slideIndex]||slides[0]);
-  const example=slide.example?.trim();
-  if(action==='quiz') return {answer:slide.prompt?`Mashq: ${slide.prompt}\n\nIshora: ${slides[1]?.body||slide.body}\n\nJavobingizda qoida va hisoblash qadamlarini ko‘rsating.`:`Mini savol: “${slide.title}” mavzusidagi asosiy qoida nima? ${example?`Darsdagi “${example}” misolidan foydalanib javob toping.`:'Dars izohini o‘qib, o‘z so‘zingiz bilan tushuntirib ko‘ring.'}`,configured:false,mode:'lesson'};
-  if(action==='review') return {answer:mistakes?`Oxirgi testdagi xato javob(lar)ingizni yana bir ko‘rib chiqamiz:\n${mistakes}\nIzohdagi qoidani qayta o‘qing, so‘ng dars misolini o‘zingiz yechib ko‘ring.`:'Bu dars bo‘yicha yakunlangan test natijangiz hali topilmadi. Avval testni ishlang, keyin xatolaringizni shu yerda birga ko‘rib chiqamiz.',configured:false,mode:'lesson'};
-  if(action==='example') return {answer:`${slide.title}\n${slide.body}${example?`\n\nNatija: ${example}`:''}\n\nShu qoidani o‘zingizga tanish boshqa vaziyatda ham sinab ko‘ring.`,configured:false,mode:'lesson'};
-  if(action==='steps') return {answer:`Keling, bosqichma-bosqich ko‘ramiz:\n1. Mavzu: ${slide.title}.\n2. Asosiy qoida: ${slide.body}\n${example?`3. Dars misoli: ${example}\n4. Misolni shu qoida bilan o‘zingiz yechib ko‘ring.`:'3. Darsdagi qoidani kichik bir misolda qo‘llab ko‘ring.'}`,configured:false,mode:'lesson'};
-  if(action==='ask'&&ranked[0]?.score===0) return {answer:`Savolingizni shu darsdagi mavzu bilan boglay olmadim. Bu darsda ${slides.map(item=>item.title).join(', ')} korib chiqiladi. Shu mavzulardan qaysi birini tushuntiray?`,configured:false,mode:'lesson'};
-  const intro=focused?`${focused.title}: ${focused.body}`:`${slides[0]?.body||slide.body}`;
-  const rule=slides[1]?.body||slide.body;
-  const worked=slides[2];
-  return {answer:`Soddaroq tushuntirish\n${lesson.title}\n\nTushuncha: ${intro}\n\nAsosiy qoida: ${rule}${worked?`\n\nYechilgan misol:\n${worked.body}${worked.example?`\n${worked.example}`:''}`:example?`\n\nMisol: ${example}`:''}\n\nXulosa: ${slides.at(-1)?.body||rule}`,configured:false,mode:'lesson'};
-}
+type TutorSlide = { title:string; body:string; example?:string; prompt?:string; section?:string; code?:string; expected?:string };
 function sessionResponse(userId: number) {
   const user = one('SELECT id,name,email,role,avatar FROM users WHERE id=?', userId);
   const response = json({ user });
@@ -37,6 +20,10 @@ async function handle(request: NextRequest, context: Context) {
     const { path } = await context.params;
     const route = path.join('/');
     const method = request.method;
+    if (route === 'ai/status' && method === 'GET') {
+      requireUser(request,['student']);
+      return json({configured:Boolean((process.env.AI_API_KEY||process.env.OPENAI_API_KEY)?.trim())});
+    }
     let b: Record<string, any> = {};
     if (method !== 'GET') {
       const origin = request.headers.get('origin');
@@ -99,7 +86,7 @@ async function handle(request: NextRequest, context: Context) {
       const { slides_json, ...meta } = lesson;
       return json({ lesson: { ...meta, slides: JSON.parse(slides_json) }, progress: one('SELECT * FROM progress WHERE user_id=? AND lesson_id=?', user.id, id) || null,
         assessments: all('SELECT id,title,kind,duration_seconds FROM assessments WHERE lesson_id=? OR (module_id=? AND kind=?)', id, lesson.module_id, 'exam'),
-        lab: one('SELECT * FROM labs WHERE user_id=? AND lesson_id=?', user.id, id) || null, aiConfigured: Boolean(process.env.AI_API_KEY) });
+        lab: one('SELECT * FROM labs WHERE user_id=? AND lesson_id=?', user.id, id) || null, aiConfigured: Boolean((process.env.AI_API_KEY||process.env.OPENAI_API_KEY)?.trim()) });
     }
     if (path[0] === 'lessons' && path[2] === 'progress' && path.length === 3 && method === 'POST') {
       requireUser(request, ['student']); const id = integer(Number(path[1]));
@@ -158,7 +145,9 @@ async function handle(request: NextRequest, context: Context) {
     if (route === 'support' && method === 'POST') {
       requireUser(request, ['student']); rateLimit(`support:${user.id}`, 10, 3600000);
       const lessonId = integer(b.lessonId); check(one('SELECT id FROM lessons WHERE id=?', lessonId), 'Dars topilmadi.', 404);
-      run('INSERT INTO support(student_id,lesson_id,question,created_at) VALUES(?,?,?,?)', user.id, lessonId, textField(b.question, 'Savol', 5, 3000), Date.now()); return json({ ok: true });
+      const question = textField(b.question, 'Savol', 5, 3000);
+      check(/\s/u.test(question) || /[aeiouаеиоуыэюя]/iu.test(question), 'Savolni tushunarli so‘zlar bilan yozing. Masalan: “Foiz qanday hisoblanadi?”');
+      run('INSERT INTO support(student_id,lesson_id,question,created_at) VALUES(?,?,?,?)', user.id, lessonId, question, Date.now()); return json({ ok: true });
     }
     if (path[0] === 'support' && path[2] === 'reply' && path.length === 3 && method === 'POST') {
       requireUser(request, ['teacher']); const id = integer(Number(path[1]));
@@ -222,17 +211,18 @@ async function handle(request: NextRequest, context: Context) {
     }
     if (route === 'ai' && method === 'POST') {
       requireUser(request,['student']);
-      const apiKey=process.env.AI_API_KEY;
+      const apiKey=(process.env.AI_API_KEY||process.env.OPENAI_API_KEY)?.trim();
       rateLimit(`ai:${user.id}`,15,60*60*1000);
       const lessonId=integer(b.lessonId);
       const lesson=one('SELECT l.*,m.title AS module_title,c.title AS course_title FROM lessons l JOIN modules m ON m.id=l.module_id JOIN courses c ON c.id=m.course_id WHERE l.id=?',lessonId);
       check(lesson,'Dars topilmadi.',404);
       check(!one("SELECT a.id FROM attempts a JOIN assessments s ON s.id=a.assessment_id WHERE a.user_id=? AND s.module_id=? AND s.kind='exam' AND a.submitted_at IS NULL",user.id,lesson.module_id),'Modul imtihoni davomida AI vaqtincha o‘chiriladi.',403);
+      check(apiKey,'AI xizmati ulanmagan. Serverga AI_API_KEY yoki OPENAI_API_KEY sozlang.',503);
       const action=String(b.action||'explain');
-      check(['explain','example','steps','quiz','review','ask'].includes(action),'Yordam turini tanlang.');
-      const question=action==='ask'?textField(b.question,'Savol',3,1200).replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi,'[email manzil]').replace(/\+?\d(?:[\s().-]*\d){9,}/g,'[telefon raqami]'):'';
+      check(['explain','example','steps','quiz','review','ask','code'].includes(action),'Yordam turini tanlang.');
+      const question=['ask','code'].includes(action)&&b.question?textField(b.question,'Savol',3,1200).replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi,'[email manzil]').replace(/\+?\d(?:[\s().-]*\d){9,}/g,'[telefon raqami]'):'';
       const slides=JSON.parse(lesson.slides_json) as TutorSlide[];
-          const material=slides.map(s=>`${s.section?`[${s.section}] `:''}${s.title}: ${s.body}${s.example?` Misol: ${s.example}`:''}${s.prompt?` Mashq: ${s.prompt}`:''}`).join('\n');
+      const material=slides.map(s=>`${s.section?`[${s.section}] `:''}${s.title}: ${s.body}${s.example?` Misol: ${s.example}`:''}${s.code?`\nKod:\n${s.code.slice(0,2800)}`:''}${s.expected?`\nKutiladigan natija: ${s.expected}`:''}${s.prompt?` Mashq: ${s.prompt}`:''}`).join('\n\n').slice(0,8500);
       let mistakes='';
       if(action==='review') {
         const attempt=one<{questions_json:string;answers_json:string|null;feedback_json:string|null}>('SELECT a.questions_json,a.answers_json,a.feedback_json FROM attempts a JOIN assessments s ON s.id=a.assessment_id WHERE a.user_id=? AND s.lesson_id=? AND s.kind=\'test\' AND a.submitted_at IS NOT NULL ORDER BY a.submitted_at DESC LIMIT 1',user.id,lessonId);
@@ -241,13 +231,27 @@ async function handle(request: NextRequest, context: Context) {
           mistakes=qs.map((q:any,i:number)=>feedback[i]?.correct?null:`Savol: ${q.prompt}; tanlangan javob: ${q.options[answers[i]]??'javob berilmagan'}; to‘g‘ri javob: ${q.options[q.correctIndex]}; izoh: ${q.explanation}`).filter(Boolean).join('\n');
         }
       }
-      if(!apiKey) return json(localTutorAnswer(action,question,lesson,slides,mistakes));
-      const endpoint=new URL(process.env.AI_API_URL||'https://api.openai.com/v1/chat/completions');
+      let endpoint:URL;try{endpoint=new URL(process.env.AI_API_URL||'https://api.openai.com/v1/chat/completions');}catch{throw new AppError('AI_API_URL noto‘g‘ri. Administrator provayder manzilini tekshirishi kerak.',503);}
       check(endpoint.protocol==='https:'||(process.env.NODE_ENV!=='production'&&endpoint.protocol==='http:'),'AI_API_URL xavfsiz HTTPS manzili bo‘lsin.');
-      const instruction:Record<string,string>={explain:'Mavzuni sodda va aniq tushuntir.',example:'Mavzuga mos yangi hayotiy misol keltir va yechimini bosqichma-bosqich ko‘rsat.',steps:'Tayyor javobni darrov bermay, masalani kichik qadamlar bilan yechishga yo‘naltir.',quiz:'Mavzu bo‘yicha bitta yangi savol ber; javobini hozir aytma.',review:'O‘quvchining xatosini muloyim tushuntir, keyin o‘xshash mashq taklif qil.',ask:question};
+      check(endpoint.protocol==='https:'||(process.env.NODE_ENV!=='production'&&endpoint.protocol==='http:'),'AI_API_URL xavfsiz HTTPS manzili bo‘lsin.');
+      const instruction:Record<string,string>={explain:'Mavzuni sodda va aniq tushuntir.',example:'Mavzuga mos yangi va aniq misol keltir; natijasini tushuntir.',steps:'Tayyor javobni darrov bermay, masalani kichik qadamlar bilan yechishga yo‘naltir.',quiz:'Mavzu bo‘yicha bitta yangi savol ber; javobini hozir aytma.',review:'O‘quvchining xatosini muloyim tushuntir, keyin o‘xshash mashq taklif qil.',ask:question,code:'O‘quvchining kodini tushuntir. Kod berilmagan bo‘lsa, darsdagi kod misolini izohla; aks holda yuborilgan koddagi buyruqlar va natijani tushuntir. '+question};
+      const history=Array.isArray(b.history)?b.history.slice(-8).flatMap((m:any)=>m&&['user','assistant'].includes(m.role)&&typeof m.content==='string'&&m.content.trim()? [{role:m.role,content:m.content.slice(0,1200)}]:[]):[];
+      const stream=b.stream===true;
+      const system='Sen ILMORA platformasida o‘zbek tilida sodda, aniq va muloyim tushuntiradigan ustozsan. Javobni joriy dars mazmuni va kodiga tayab ber; boshqa mavzuni h1 misoliga majburan bog‘lama. Yetarli ma’lumot bo‘lmasa buni ochiq ayt. Imtihon javobi yoki yashirin test kalitini bermagin. Shaxsiy ma’lumot so‘rama.\nJoriy kurs: '+lesson.course_title+'. Modul: '+lesson.module_title+'. Dars: '+lesson.title+'.\nDarsning qisqa mazmuni: '+lesson.description+'\nTasdiqlangan slaydlar va kod:\n'+material+(mistakes?'\nO‘quvchining oxirgi test xatolari:\n'+mistakes:'');
       try {
-        const response=await fetch(endpoint,{method:'POST',headers:{Authorization:`Bearer ${apiKey}`,'Content-Type':'application/json'},body:JSON.stringify({model:process.env.AI_MODEL||'gpt-4o-mini',temperature:0.2,max_tokens:650,messages:[{role:'system',content:'Sen ILMORA platformasidagi aniq va muloyim o‘zbekcha ustozsan. Javobni faqat berilgan dars materiali va ishonchli umumiy bilimga tayab ber. Hisobni tekshir; material yetarli bo‘lmasa buni ochiq ayt va ustozdan so‘rashni taklif qil. O‘quvchiga fikrlash yo‘lini ko‘rsat. Hozirgi imtihon javoblarini yoki yashirin kalitlarni bermagin. Shaxsiy ma’lumot so‘rama.'},{role:'user',content:`Kurs: ${lesson.course_title}. Modul: ${lesson.module_title}. Dars: ${lesson.title}.\nTasdiqlangan material:\n${material}\n${mistakes?`O‘quvchining oldingi test xatolari:\n${mistakes}\n`:''}Amal: ${instruction[action]}`}]}),signal:AbortSignal.timeout(20000)});
-        if(!response.ok) throw new Error(`provider ${response.status}`);
+        const providerPayload={model:process.env.AI_MODEL||'gpt-4o-mini',temperature:0.2,max_tokens:800,stream,messages:[{role:'system',content:system},...history,{role:'user',content:'Yordam turi: '+action+'. '+instruction[action]}]};
+        const providerRequest={method:'POST',headers:{Authorization:'Bearer '+apiKey,'Content-Type':'application/json'},signal:AbortSignal.timeout(25000)} as const;
+        let response=await fetch(endpoint,{...providerRequest,body:JSON.stringify(providerPayload)});
+        if(!response.ok&&stream&&(response.status===400||response.status===422)) response=await fetch(endpoint,{...providerRequest,body:JSON.stringify({...providerPayload,stream:false})});
+        if(!response.ok) {
+          if(response.status===401) throw new AppError("AI provayderi API kalitni qabul qilmadi (401). Kalit faol va shu provayderga tegishli ekanini tekshiring.",502);
+          if(response.status===403) throw new AppError("AI kalitida modeldan foydalanish huquqi mavjud emas (403). Provayder kabinetidagi ruxsat va billing holatini tekshiring.",502);
+          if(response.status===404) throw new AppError("AI modeli yoki endpoint topilmadi (404). AI_API_URL va AI_MODEL mos provayderga qarashini tekshiring.",502);
+          if(response.status===429) throw new AppError("AI provayder so'rovlar limitiga yetdi (429). Billing yoki quota holatini tekshiring, so'ng qayta urinib ko'ring.",503);
+          if(response.status===400||response.status===422) throw new AppError("AI provayder so'rov formatini qabul qilmadi ("+response.status+"). AI_MODEL va provayder endpointini tekshiring.",502);
+          throw new AppError("AI provayderi vaqtincha javob bermadi ("+response.status+"). Birozdan keyin qayta urinib ko'ring.",502);
+        }
+        if(stream&&response.body&&response.headers.get('content-type')?.includes('text/event-stream')) return new Response(response.body,{status:200,headers:{'Content-Type':'text/event-stream; charset=utf-8','Cache-Control':'no-cache, no-transform','X-Accel-Buffering':'no'}});
         const payload=await response.json();
         const answer=payload.choices?.[0]?.message?.content;
         check(typeof answer==='string'&&answer.trim().length>0,'AI javob qaytarmadi.',502);
@@ -255,7 +259,7 @@ async function handle(request: NextRequest, context: Context) {
       } catch(error) {
         if(error instanceof AppError) throw error;
         console.error('AI provayderi javob bermadi:',error instanceof Error?error.message:'noma’lum xato');
-        throw new AppError('AI hozir javob bera olmadi. Birozdan keyin qayta urinib ko‘ring yoki ustozga murojaat qiling.',502);
+        if(error instanceof DOMException&&error.name==='TimeoutError') throw new AppError('AI javobi uzoq kutilgani uchun vaqt tugadi. Qayta urinib ko‘ring.',504); throw new AppError('AI hozir javob bera olmadi. Birozdan keyin qayta urinib ko‘ring.',502);
       }
     }
     throw new AppError('Manzil topilmadi.',404);

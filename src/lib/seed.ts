@@ -1,9 +1,10 @@
 import { all, one, run, transaction } from './db';
 import { hashPassword, check } from './auth';
 import { professionalLessonContent } from './lesson-content';
+import { slidesForWebLesson, webCurriculum } from './web-curriculum';
 
 export function seedContent() {
-  if (one('SELECT id FROM courses LIMIT 1')) { seedRemainingContent(); seedAdditionalCourses(); applyProfessionalLessonContent(); return; }
+  if (one('SELECT id FROM courses LIMIT 1')) { seedRemainingContent(); seedAdditionalCourses(); applyProfessionalLessonContent(); seedWebCurriculum(); return; }
   transaction(() => {
     run('INSERT INTO courses(id,title,description,subject,color) VALUES(1,?,?,?,?)', 'Kasrlar va foizlar', 'Butunning bo‘laklaridan kundalik hisob-kitoblargacha. Ko‘ring, sinab ko‘ring va o‘zingizni tekshiring.', 'Matematika', 'orange');
     const modules = [
@@ -69,6 +70,62 @@ export function seedContent() {
   seedRemainingContent();
   seedAdditionalCourses();
   applyProfessionalLessonContent();
+  seedWebCurriculum();
+}
+
+// Versioned, transactional curriculum migration. Existing lesson/module IDs and
+// learner progress/attempt snapshots remain intact; only authored lesson material
+// and per-lesson question rows are replaced on the first migration run.
+function seedWebCurriculum() {
+  transaction(() => {
+    run('CREATE TABLE IF NOT EXISTS content_migrations (migration_key TEXT PRIMARY KEY, applied_at INTEGER NOT NULL)');
+    if (one('SELECT migration_key FROM content_migrations WHERE migration_key=?', 'web-curriculum-24-v2')) return;
+    const course = one<{id:number}>('SELECT id FROM courses WHERE title=? ORDER BY id LIMIT 1', 'Web dasturlash asoslari');
+    if (!course) return;
+    const oldModules = all<{id:number;title:string}>('SELECT id,title FROM modules WHERE course_id=? ORDER BY position,id', course.id);
+    const moduleIds = webCurriculum.map((module, index) => {
+      const existing = oldModules[index];
+      if (existing) {
+        run('UPDATE modules SET title=?,position=? WHERE id=?', module.title, index + 1, existing.id);
+        return existing.id;
+      }
+      const found = one<{id:number}>('SELECT id FROM modules WHERE course_id=? AND title=?', course.id, module.title);
+      if (found) { run('UPDATE modules SET position=? WHERE id=?', index + 1, found.id); return found.id; }
+      const result = run('INSERT INTO modules(course_id,title,position) VALUES(?,?,?)', course.id, module.title, index + 1);
+      return Number(result.lastInsertRowid);
+    });
+    const legacyLessons = all<{id:number;module_id:number;position:number}>('SELECT l.id,l.module_id,l.position FROM lessons l JOIN modules m ON m.id=l.module_id WHERE m.course_id=? ORDER BY m.position,l.position,l.id', course.id);
+    const legacyIds = legacyLessons.map(row => row.id);
+    let cursor = 0;
+    for (let mi=0; mi<webCurriculum.length; mi++) {
+      const module = webCurriculum[mi];
+      for (let li=0; li<module.lessons.length; li++) {
+        const item = module.lessons[li];
+        const legacyId = legacyIds[cursor++];
+        const description = `${item.description} ${item.objective}`;
+        let lessonId:number;
+        if (legacyId) {
+          lessonId = legacyId;
+          run('UPDATE lessons SET module_id=?,title=?,description=?,position=?,slides_json=? WHERE id=?', moduleIds[mi], item.title, description, li + 1, JSON.stringify(slidesForWebLesson(item)), lessonId);
+        } else {
+          const result = run('INSERT INTO lessons(module_id,title,description,position,slides_json) VALUES(?,?,?,?,?)', moduleIds[mi], item.title, description, li + 1, JSON.stringify(slidesForWebLesson(item)));
+          lessonId = Number(result.lastInsertRowid);
+        }
+        let assessment = one<{id:number}>('SELECT id FROM assessments WHERE lesson_id=? AND kind=? ORDER BY id LIMIT 1', lessonId, 'test');
+        if (!assessment) {
+          const result = run('INSERT INTO assessments(lesson_id,module_id,title,kind,duration_seconds) VALUES(?,?,?,\'test\',600)', lessonId, moduleIds[mi], `${item.title} — dars testi`);
+          assessment = {id:Number(result.lastInsertRowid)};
+        } else {
+          run('UPDATE assessments SET module_id=?,title=?,duration_seconds=600 WHERE id=?', moduleIds[mi], `${item.title} — dars testi`, assessment.id);
+          run('DELETE FROM questions WHERE assessment_id=?', assessment.id);
+        }
+        for (const question of item.questions) {
+          run('INSERT INTO questions(assessment_id,prompt,options_json,correct_index,explanation) VALUES(?,?,?,?,?)', assessment.id, question.prompt, JSON.stringify(question.options), question.correctIndex, question.explanation);
+        }
+      }
+    }
+    run('INSERT INTO content_migrations(migration_key,applied_at) VALUES(?,?)', 'web-curriculum-24-v2', Date.now());
+  });
 }
 
 // Apply the authored curriculum once per lesson so database seeding remains safe

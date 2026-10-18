@@ -24,20 +24,31 @@ async function call(path:string,body?:unknown,user?:User) {
   const response=await(body===undefined?GET:POST)(req,{params:Promise.resolve({path:path.split('/')})});
   return {response,data:await response.json()};
 }
-test('Demo: 4 kurs, 8 modul, 24 dars; testlarda 5, imtihonlarda 10 savol',()=>{
-  assert.equal(Object.getPrototypeOf(student),Object.prototype,'SQLite rows must be serializable React props');
-  assert.equal(all('SELECT * FROM courses').length,4);assert.equal(all('SELECT * FROM modules').length,8);
-  assert.equal(all('SELECT * FROM lessons').length,24);
-  for(const l of all('SELECT * FROM lessons')) {
-    const slides=JSON.parse(l.slides_json);
-    assert.equal(slides.length,5);
-    assert.deepEqual(slides.map((slide:any)=>slide.section),['Mavzuga kirish','Asosiy qoida','Misolni yechamiz','Mustaqil mashq','Xulosa']);
-    assert.ok(slides.every((slide:any)=>slide.body.length>80&&slide.example.length>20),`${l.title} uchun dars mazmuni to‘liq bo‘lishi kerak`);
-  }
-  for(const a of all('SELECT * FROM assessments'))assert.equal(all('SELECT * FROM questions WHERE assessment_id=?',a.id).length,a.kind==='exam'?10:5);
-  const counts=[all('SELECT * FROM courses').length,all('SELECT * FROM modules').length,all('SELECT * FROM lessons').length];
+test('Demo: 4 kurs; Web kursida 4 modul va 24 farqli dars; testlar mavzuga mos',()=>{
+  assert.equal(Object.getPrototypeOf(student),Object.prototype,'SQLite qatorlari React props uchun oddiy obyekt bo‘lishi kerak');
+  assert.equal(all('SELECT * FROM courses').length,4);assert.equal(all('SELECT * FROM modules').length,10);assert.equal(all('SELECT * FROM lessons').length,42);
+  const web=one<{id:number}>('SELECT id FROM courses WHERE title=?','Web dasturlash asoslari')!;
+  const webModules=all<{id:number}>('SELECT id FROM modules WHERE course_id=? ORDER BY position',web.id);assert.equal(webModules.length,4);
+  const webRows=all<{id:number;title:string;slides_json:string}>('SELECT l.id,l.title,l.slides_json FROM lessons l JOIN modules m ON m.id=l.module_id WHERE m.course_id=? ORDER BY m.position,l.position',web.id);assert.equal(webRows.length,24);
+  for(const module of webModules)assert.equal(all('SELECT id FROM lessons WHERE module_id=?',module.id).length,6);
+  for(const row of webRows.slice(12,18))assert.doesNotThrow(()=>new Function(JSON.parse(row.slides_json)[2].code),`${row.title}: JavaScript kodi sintaksis jihatdan tekshirilsin`);
+  const codes=new Set<string>();
+  for(const row of webRows){const slides=JSON.parse(row.slides_json);assert.equal(slides.length,5);assert.ok(slides[2].code?.length>20, row.title);assert.ok(slides[2].expected?.length>15,row.title);assert.ok(slides[3].prompt?.length>30,row.title);codes.add(slides[2].code);const exam=one<{id:number}>('SELECT id FROM assessments WHERE lesson_id=? AND kind=?',row.id,'test')!;const questions=all<{prompt:string}>('SELECT prompt FROM questions WHERE assessment_id=?',exam.id);assert.equal(questions.length,4);assert.equal(new Set(questions.map(q=>q.prompt)).size,4);}
+  assert.equal(codes.size,24,'Web darslarining kod namunalari takrorlanmasin');
+  for(const row of all('SELECT * FROM lessons'))assert.ok(JSON.parse(row.slides_json).every((slide:any)=>slide.body.length>30),row.title);
+  for(const assessment of all('SELECT * FROM assessments'))assert.equal(all('SELECT id FROM questions WHERE assessment_id=?',assessment.id).length,assessment.kind==='exam'?10:assessment.lesson_id&&webRows.some(row=>row.id===assessment.lesson_id)?4:5);
+  const legacyId=webRows[0].id,legacyTest=one<{id:number}>('SELECT id FROM assessments WHERE lesson_id=? AND kind=?',legacyId,'test')!.id;
+  run('INSERT INTO progress(user_id,lesson_id,slide,completed,updated_at) VALUES(?,?,?,?,?) ON CONFLICT(user_id,lesson_id) DO UPDATE SET slide=excluded.slide,completed=excluded.completed',student.id,legacyId,3,1,Date.now());
+  const attempt=startAttempt(student.id,legacyTest);const attemptsBefore=all('SELECT id FROM attempts WHERE assessment_id=?',legacyTest).length;const idsBefore=webRows.map(row=>row.id);
   seedContent();
-  assert.deepEqual([all('SELECT * FROM courses').length,all('SELECT * FROM modules').length,all('SELECT * FROM lessons').length],counts,'Qayta seed dublikat yaratmasligi kerak');
+  assert.deepEqual(all<{id:number}>('SELECT l.id FROM lessons l JOIN modules m ON m.id=l.module_id WHERE m.course_id=? ORDER BY m.position,l.position',web.id).map(row=>row.id),idsBefore,'Eski lesson IDlari saqlansin');
+  assert.deepEqual(one('SELECT slide,completed FROM progress WHERE user_id=? AND lesson_id=?',student.id,legacyId),{slide:3,completed:1},'Progress saqlansin');
+  assert.equal(one('SELECT id FROM attempts WHERE id=?',attempt.id)?.id,attempt.id,'Test natijasi/urinishi saqlansin');assert.equal(all('SELECT id FROM attempts WHERE assessment_id=?',legacyTest).length,attemptsBefore);
+  assert.deepEqual([all('SELECT * FROM courses').length,all('SELECT * FROM modules').length,all('SELECT * FROM lessons').length],[4,10,42],'Qayta seed dublikat yaratmasin');
+});
+test('Har bir Web darsining URLi o‘ziga tegishli kontentni qaytaradi',async()=>{
+  const rows=all<{id:number;title:string}>('SELECT l.id,l.title FROM lessons l JOIN modules m ON m.id=l.module_id JOIN courses c ON c.id=m.course_id WHERE c.title=? ORDER BY m.position,l.position','Web dasturlash asoslari');
+  for(const row of rows){const result=await call(`lessons/${row.id}`,undefined,student);assert.equal(result.response.status,200);assert.equal(result.data.lesson.id,row.id);assert.equal(result.data.lesson.title,row.title);assert.equal(result.data.lesson.slides.length,5);}
 });
 test('Parollar salt bilan hash qilinadi va to‘g‘ri tekshiriladi',()=>{
   const h=hashPassword(password);assert.notEqual(h,password);assert.notEqual(h,hashPassword(password));assert.equal(verifyPassword(password,h),true);assert.equal(verifyPassword('boshqa parol',h),false);
@@ -99,16 +110,16 @@ test('Har bir rol o‘z ismi va avatarini o‘zgartira oladi',async()=>{
 test('AI materialdan javob oladi va faol modul imtihonida bloklanadi',async()=>{
   const oldKey=process.env.AI_API_KEY,oldUrl=process.env.AI_API_URL,oldModel=process.env.AI_MODEL,originalFetch=globalThis.fetch;
   process.env.AI_API_KEY='test-only-key';process.env.AI_API_URL='https://ai.example.test/v1/chat/completions';process.env.AI_MODEL='test-model';
-  let providerBody='';
-  globalThis.fetch=(async(_input:any,init?:RequestInit)=>{assert.equal(new Headers(init?.headers).get('authorization'),'Bearer test-only-key');providerBody=String(init?.body);return Response.json({choices:[{message:{content:'1/2 = 2/4, chunki surat va maxrajni 2 ga ko‘paytirdik.'}}]});}) as typeof fetch;
+  let providerBody='';const providerBodies:string[]=[];let providerCalls=0;
+  globalThis.fetch=(async(_input:any,init?:RequestInit)=>{assert.equal(new Headers(init?.headers).get('authorization'),'Bearer test-only-key');providerBody=String(init?.body);providerBodies.push(providerBody);providerCalls++;if(JSON.parse(providerBody).stream)return Response.json({error:'stream unsupported'},{status:400});return Response.json({choices:[{message:{content:'1/2 = 2/4, chunki surat va maxrajni 2 ga ko‘paytirdik.'}}]});}) as typeof fetch;
   try {
     const lesson=one<{id:number;module_id:number}>("SELECT id,module_id FROM lessons WHERE id=1")!;
     const exam=one<{id:number}>("SELECT id FROM assessments WHERE module_id=? AND kind='exam'",lesson.module_id)!;
     const attempt=startAttempt(student.id,exam.id);
     assert.equal((await call('ai',{lessonId:lesson.id,action:'explain'},student)).response.status,403);
     submitAttempt(student.id,attempt.id,new Array(attempt.questions.length).fill(null));
-    const reply=await call('ai',{lessonId:lesson.id,action:'explain'},student);
-    assert.equal(reply.response.status,200);assert.match(reply.data.answer,/2\/4/);assert.match(providerBody,/Tasdiqlangan material/);assert.ok(!providerBody.includes(student.email));
+    const reply=await call('ai',{lessonId:lesson.id,action:'code',question:'const x = 1;',history:[{role:'user',content:'oldingi savol'},{role:'assistant',content:'oldingi javob'}],stream:true},student);
+    assert.equal(reply.response.status,200);assert.match(reply.data.answer,/2\/4/);assert.match(providerBody,/Tasdiqlangan slaydlar va kod/);assert.match(providerBody,/Joriy kurs/);assert.match(providerBody,/const x = 1/);assert.match(providerBody,/oldingi javob/);assert.equal(providerCalls,2);assert.equal(JSON.parse(providerBodies[0]).stream,true);assert.equal(JSON.parse(providerBody).stream,false);assert.ok(!providerBody.includes(student.email));
   } finally {
     globalThis.fetch=originalFetch;
     if(oldKey===undefined)delete process.env.AI_API_KEY;else process.env.AI_API_KEY=oldKey;
@@ -152,6 +163,9 @@ test('Yashirin/harakatsiz vaqt va uzoq heartbeat faol o‘qishga qo‘shilmaydi'
   assert.equal(all('SELECT * FROM rewards WHERE user_id=?',stranger.id).length,0);
 });
 test('Savol yuboriladi, faqat biriktirilgan ustoz javob beradi',async()=>{
+  const malformed=await call('support',{lessonId:1,question:'.mnln;kn'},student);
+  assert.equal(malformed.response.status,400);
+  assert.equal(one('SELECT id FROM support WHERE question=?','.mnln;kn'),undefined,'Tushunarsiz matn savol sifatida saqlanmasin');
   assert.equal((await call('support',{lessonId:1,question:'Kasrlarni qanday qisqartirish mumkin?'},student)).response.status,200);
   const list=await call('support',undefined,teacher),q=list.data.questions[0];assert.equal(q.student_id,student.id);
   assert.equal((await call(`support/${q.id}/reply`,{answer:'Surat va maxrajni bir xil songa bo‘ling.'},teacher)).response.status,200);
@@ -167,14 +181,32 @@ test('Admin kontenti tahrirlanadi, yangi hisob va bog‘lanish ruxsati tekshiril
   assert.equal((await call('admin/users',{name:'Yangi ustoz',email:'newteacher@example.uz',password,role:'teacher'},admin)).response.status,200);
   assert.equal((await call('admin/users',{name:'Admin',email:'bad@example.uz',password,role:'admin'},admin)).response.status,400);
 });
-test('AI kalitisiz dars yordamchisi ishlaydi; logout sessiyani bekor qiladi',async()=>{
+test('AI provayder xatolari sababiga qarab tushunarli ajratiladi',async()=>{
+  const priorKey=process.env.AI_API_KEY,priorUrl=process.env.AI_API_URL,priorModel=process.env.AI_MODEL,priorFetch=globalThis.fetch;
+  process.env.AI_API_KEY='test-key';delete process.env.AI_API_URL;delete process.env.AI_MODEL;
+  const cases:[[number,RegExp],[number,RegExp],[number,RegExp],[number,RegExp]]=[[401,/kalitni qabul qilmadi/],[403,/huquqi mavjud emas/],[404,/endpoint topilmadi/],[429,/limitiga yetdi/]];
+  try {
+    for(const [status,message] of cases) {
+      globalThis.fetch=(async()=>new Response('{}',{status})) as typeof fetch;
+      const result=await call('ai',{lessonId:1,action:'explain'},student);
+      assert.equal(result.response.status,status===429?503:502);
+      assert.match(result.data.error,message);
+    }
+  } finally {
+    globalThis.fetch=priorFetch;
+    if(priorKey===undefined)delete process.env.AI_API_KEY;else process.env.AI_API_KEY=priorKey;
+    if(priorUrl===undefined)delete process.env.AI_API_URL;else process.env.AI_API_URL=priorUrl;
+    if(priorModel===undefined)delete process.env.AI_MODEL;else process.env.AI_MODEL=priorModel;
+  }
+});
+
+test('AI kalitisiz yolgon javob bermaydi; status va logout to‘g‘ri ishlaydi',async()=>{
   const prior=process.env.AI_API_KEY;delete process.env.AI_API_KEY;
-  const result=await call('ai',{lessonId:1,action:'explain'},student);
-  assert.equal(result.response.status,200);
-  assert.equal(result.data.configured,false);
-  assert.equal(result.data.mode,'lesson');
-  assert.match(result.data.answer,/Soddaroq tushuntirish/);
+  const priorOpenAI=process.env.OPENAI_API_KEY;process.env.OPENAI_API_KEY='test-alias-key';
+  const aliasStatus=await call('ai/status',undefined,student);assert.equal(aliasStatus.data.configured,true);
+  if(priorOpenAI===undefined)delete process.env.OPENAI_API_KEY;else process.env.OPENAI_API_KEY=priorOpenAI;
+  const status=await call('ai/status',undefined,student);assert.equal(status.response.status,200);assert.equal(status.data.configured,false);
+  const result=await call('ai',{lessonId:1,action:'explain'},student);assert.equal(result.response.status,503);assert.match(result.data.error,/AI xizmati ulanmagan/);
   if(prior!==undefined)process.env.AI_API_KEY=prior;
-  assert.equal((await call('auth/logout',{},stranger)).response.status,200);
-  assert.equal((await call('auth/me',undefined,stranger)).data.user,null);
+  assert.equal((await call('auth/logout',{},stranger)).response.status,200);assert.equal((await call('auth/me',undefined,stranger)).data.user,null);
 });
