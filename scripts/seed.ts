@@ -1,8 +1,13 @@
 import './env';
+import { closeDatabase, migrateDatabase } from '../src/lib/db';
 import { seedContent, seedDemo } from '../src/lib/seed';
-seedContent();
-if (process.env.NODE_ENV === 'production') console.log('Kurs kontenti kiritildi. Production uchun demo hisoblar yaratilmaydi.');
-else {
-  seedDemo(process.env.DEMO_PASSWORD || '');
-  console.log('Demo tayyor: student@ilmora.local, parent@ilmora.local, teacher@ilmora.local, admin@ilmora.local. Parol: DEMO_PASSWORD qiymati.');
-}
+try {
+  await migrateDatabase();
+  if (process.env.NODE_ENV === 'production') {
+    await seedContent();
+    console.log('Kurs kontenti kiritildi. Demo hisoblar yaratilmaydi.');
+  } else {
+    await seedDemo(process.env.DEMO_PASSWORD || '');
+    console.log('Demo tayyor. Parol .env.local dagi DEMO_PASSWORD qiymati.');
+  }
+} finally { await closeDatabase(); }

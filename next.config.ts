@@ -2,7 +2,7 @@ import type { NextConfig } from 'next';
 import { resolve } from 'node:path';
 const config: NextConfig = {
   turbopack: { root: resolve('.') },
-  serverExternalPackages: ['node:sqlite'],
+  serverExternalPackages: ['node:sqlite', 'pg'],
   poweredByHeader: false,
   async headers() {
     return [{ source: '/:path*', headers: [

@@ -11,7 +11,7 @@ const url = (path) => new URL(`/api/${path}`, base);
 try {
   const health = await fetch(url('health'));
   const healthData = await health.json();
-  if (!health.ok || healthData.database !== 'sqlite') throw new Error(`Backend health: HTTP ${health.status}`);
+  if (!health.ok || !['sqlite','postgresql'].includes(healthData.database)) throw new Error(`Backend health: HTTP ${health.status}`);
 
   const login = await fetch(url('auth/login'), {
     method:'POST', headers:{Origin:origin,'Content-Type':'application/json'},

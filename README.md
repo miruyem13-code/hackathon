@@ -1,6 +1,6 @@
 # ILMORA — Zamonaviy ta’lim
 
-Node.js 24, Next.js 16 (App Router), React 19, TypeScript, Tailwind CSS 4 va **SQLite** bilan ishlaydigan lokal ta’lim platformasi. Backend Next.js’ning Node.js API route’larida ishlaydi; SQLite uchun Node.js’ning ichki `node:sqlite` moduli ishlatiladi. Tashqi hisob yoki database xizmati talab qilinmaydi.
+Node.js 24, Next.js 16 (App Router), React 19, TypeScript va Tailwind CSS 4 bilan ishlaydigan ta’lim platformasi. Backend Next.js Node.js API route’larida ishlaydi. Lokal muhitda ichki `node:sqlite`, Vercel’da esa `DATABASE_URL` orqali umumiy PostgreSQL bazasi ishlatiladi. Lokal SQLite uchun tashqi database hisobi kerak emas.
 
 ## Tez ishga tushirish
 
@@ -40,7 +40,7 @@ npm.cmd run db:migrate
 npm.cmd run db:seed
 ```
 
-Migratsiya: `database/001_initial.sql`. Kontent va xavfsiz demo seed: `src/lib/seed.ts`. Qayta ishga tushirish mavjud kurs va hisoblarni ko‘paytirmaydi. Seed mavjud hisoblarning parolini almashtirmaydi.
+Lokal SQLite migratsiyasi: `database/001_initial.sql`; PostgreSQL migratsiyasi: `database/001_postgres.sql`. Kontent va xavfsiz demo seed: `src/lib/seed.ts`. Qayta ishga tushirish mavjud kurs va hisoblarni ko‘paytirmaydi. Seed mavjud hisoblarning parolini almashtirmaydi.
 
 ## Taqdimot uchun oqim
 
@@ -82,18 +82,36 @@ npm.cmd run admin:create
 
 Mavjud email qayta yozilmaydi. Keyin `/login` orqali kirib `/admin` → «Bog‘lanishlar»dan ota-ona va ustoz yarating. Student ochiq registratsiyadan ro‘yxatdan o‘tadi; uni administrator tasdiqlab biriktiradi.
 
-## Production
+## Vercel + Neon PostgreSQL
 
-```powershell
-npm.cmd run build
-npm.cmd run start
+1. Neon’da PostgreSQL bazasi yarating yoki Vercel Marketplace orqali loyihaga ulang. Loyiha → Settings → Environment Variables’da `DATABASE_URL` ni Neon ulanish satriga, `APP_ORIGIN` ni haqiqiy sayt manziliga (masalan, `https://hackathon-alset.vercel.app`) sozlang. `DATABASE_URL` server siri: `NEXT_PUBLIC_` prefiksini ishlatmang va Git’ga kiritmang. Preview uchun alohida baza ishlating.
+2. Mahalliy terminalda shu repozitoriy papkasini oching va `npm ci` bajaring. `.env.local` ga **maqsad qilingan muhitning** `DATABASE_URL` qiymatini xavfsiz kiriting. SQLite bilan ishlamoqchi bo‘lsangiz bu qiymatni bo‘sh qoldiring.
+3. Schema va kurs kontentini alohida tayyorlang:
+
+   ```sh
+   npm run db:migrate
+   npm run db:seed:production
+   ```
+
+   Migratsiya tranzaksiyada va advisory lock bilan ishlaydi, bajarilgan versiya checksum bilan tekshiriladi. Qayta ishga tushirish ma’lumotlarni o‘chirmaydi. Production seed demo hisoblar yaratmaydi, mavjud hisoblarning parollarini almashtirmaydi. Buyruq muvaffaqiyatsiz bo‘lsa deployni davom ettirmang.
+4. Kerak bo‘lsa `ADMIN_EMAIL`, `ADMIN_PASSWORD` (kamida 12 belgi) va `ADMIN_NAME` ni lokal `.env.local` da vaqtincha belgilang, so‘ng `npm run admin:create` bajaring. Bu buyruqni oddiy build ichiga qo‘shmang. `DEMO_PASSWORD` ni production muhitiga qo‘ymang.
+5. Shu kodni Vercel’ga deploy qiling. Build Command: `npm run build`, Node.js: `24.x`. Baza build paytida ochilmaydi; build ichida migratsiya yoki seed bajarilmaydi. Environment o‘zgarsa yangi deployment kerak.
+6. Saytning `/api/health` manzili `200` va `{"ok":true,"backend":"nodejs","database":"postgresql"}` qaytarsin. Keyin `/register` orqali yangi o‘quvchi yarating, `/login` bilan qayta kiring va darslar ochilishini tekshiring. Deployment Protection yoqilgan bo‘lsa o‘z Vercel hisobingiz bilan kiring.
+
+`DATABASE_URL` Vercel’da bo‘lmasa API aniq `503` xabari beradi; lokal SQLite fayli yaratilmaydi. Schema tayyor bo‘lmasa API migratsiya kerakligini bildiradi. Ulanish satri yoki ichki SQL xatolari foydalanuvchiga chiqarilmaydi. Faqat build muvaffaqiyatli tugashi baza ishlayotganini tasdiqlamaydi.
+
+Mavjud SQLite hisoblari va natijalari PostgreSQL’ga avtomatik ko‘chirilmaydi. Migratsiya yangi PostgreSQL schema yaratadi; eski lokal SQLite fayllari o‘zgarmaydi. Eski ma’lumot kerak bo‘lsa avval backup oling va alohida import rejasini bajaring. Mavjud PostgreSQL bazasini almashtirmang yoki tozalamang.
+
+## Doimiy diskli Node.js server
+
+```sh
+npm run build
+npm run start
 ```
 
-**Doimiy diskli Node.js server kerak.** `DATABASE_PATH` ni yozish mumkin bo‘lgan doimiy diskka qo‘ying. SQLite fayli, `-wal` va `-shm` fayllari runtime ma’lumotlaridir; Git’ga kiritilmaydi. Vaqtinchalik serverless diskda yoki Vercel Functions’da doimiy saqlanish kafolatlanmaydi. Bu versiya Sites/Cloudflare Workers uchun mo‘ljallanmagan va hostingga joylashtirilmagan.
+Bunday serverda ham `DATABASE_URL` orqali PostgreSQL ishlatish mumkin. Lokal SQLite tanlansa `DATABASE_URL` bo‘sh, `DATABASE_PATH` esa yozish mumkin bo‘lgan doimiy diskda bo‘lsin. SQLite fayli, `-wal` va `-shm` runtime ma’lumotlari Git’ga kiritilmaydi. Bir nechta server uchun PostgreSQL ishlating. SQLite backup uchun serverni to‘xtatib bazani nusxalang yoki muvofiqlashtirilgan backup vositasidan foydalaning.
 
-`APP_ORIGIN` ni haqiqiy HTTPS domeningizga o‘rnating. Production’da Secure cookie ishlagani uchun ommaviy serverni HTTPS reverse proxy ortida ishlating. `next start` va `next dev` lokal xavfsiz ishlatish uchun `127.0.0.1` ga bog‘langan; reverse proxy shu portga yo‘naltirsin. Kurs kontentini production’da kiritish uchun `NODE_ENV=production` bilan `db:seed` ishlating: demo hisoblar yaratilmaydi. `DEMO_PASSWORD` ni production muhitiga qo‘ymang.
-
-Bitta Node.js server jarayoni/doimiy disk uchun mo‘ljallangan. Bir nechta serverga o‘tishdan oldin umumiy PostgreSQL kabi saqlashga ko‘chirish kerak. Zaxira olishda serverni to‘xtating va SQLite bazasini nusxalang yoki SQLite’ning muvofiqlashtirilgan backup vositasidan foydalaning.
+`APP_ORIGIN` ni haqiqiy HTTPS domeningizga o‘rnating. Production’da Secure cookie ishlaydi; ommaviy serverni HTTPS reverse proxy ortida ishlating. `next start` va `next dev` `127.0.0.1` ga bog‘langan. Bu loyiha Cloudflare Workers uchun moslashtirilmagan.
 
 ## Tekshiruvlar
 
@@ -104,13 +122,14 @@ npm.cmd run build
 npm.cmd run test:e2e
 ```
 
-Ishlayotgan server backendini amalda tekshirish uchun `npm.cmd run smoke` buyrug‘ini bajaring. U SQLite ulanishi, demo login/session, kurs, dars, laboratoriya bog‘lanishi va hisobot API’sini ko‘radi, javoblarni yoki progressni o‘zgartirmaydi. Port avtomatik o‘zgargan bo‘lsa:
+Ishlayotgan server backendini amalda tekshirish uchun `npm.cmd run smoke` buyrug‘ini bajaring. U tanlangan baza ulanishi, demo login/session, kurs, dars, laboratoriya bog‘lanishi va hisobot API’sini ko‘radi, javoblarni yoki progressni o‘zgartirmaydi. Port avtomatik o‘zgargan bo‘lsa:
 
 ```powershell
 npm.cmd run smoke -- http://localhost:3001
 ```
 
-- `tests/core.test.ts`: 14 ta test — login/cookie/hash, rol/CSRF, registratsiyada rol oshirishning oldini olish, ota-ona izolyatsiyasi, dars/lab, server baholashi, vaqt tugashi, XP idempotentligi, Focus pause/resume/yagona sessiya/heartbeat, teacher javobi va admin ruxsatlari.
+- `tests/core.test.ts`: 17 ta test — login/cookie/hash, rol/CSRF, registratsiyada rol oshirishning oldini olish, ota-ona izolyatsiyasi, dars/lab, server baholashi, vaqt tugashi, XP idempotentligi, Focus pause/resume/yagona sessiya/heartbeat, teacher javobi va admin ruxsatlari.
+- `tests/postgres.test.ts`: shu 17 oqim PGlite PostgreSQL engine’da, qo‘shimcha migratsiya idempotentligi, rollback, email uniqueness, atomik rate limit va health tekshiruvi. Tashqi Neon yoki haqiqiy tarmoq ulanishi bu testga kirmaydi. `tests/config.test.ts` Vercel’da DATABASE_URL bo‘lmagandagi 503 javobini tekshiradi. Jami 40 ta server testi.
 - `tests/browser/flow.spec.ts`: haqiqiy production serverga qarshi brauzer sinovlari; Focus refresh/pause, dars → lab → test, javoblarning refreshdan tiklanishi, ota-ona ko‘rishi, ustoz javobi, admin formasi va ruxsatlar. Desktop 1440px va mobil 390px holatlari, gorizontal overflow tekshiruvi.
 - E2E alohida tasodifiy parol va `data/e2e-*.sqlite` bazasidan foydalanadi. Asosiy bazani o‘zgartirmaydi. Server test tugagach yopiladi. Skrinshotlar: `artifacts/`; hisobot: `playwright-report/`.
 - Windows’da o‘rnatilgan Chrome avtomatik ishlatiladi. Chrome bo‘lmasa `npx.cmd playwright install chromium` ishlating. Boshqa tizimlarda ham Playwright Chromium talab qilinadi.
@@ -121,12 +140,12 @@ Haqiqiy tekshiruv natijalari `VERIFICATION.md` da qayd etiladi.
 
 **AI ixtiyoriy sozlanadi.** `.env.local` fayliga `AI_API_KEY` kiriting; kerak bo‘lsa `AI_API_URL` (OpenAI-compatible Chat Completions endpoint) va `AI_MODEL` ni ham belgilang, so‘ng serverni qayta ishga tushiring. Kalit faqat serverda qoladi. Yordamchi joriy dars slaydlari va test xatolaridan kontekst oladi, soatiga 15 so‘rov bilan cheklanadi va faol modul imtihonida bloklanadi. Kalit bo‘lmasa interfeys ulangan deb ko‘rsatmaydi. Har qanday generativ AI ba’zan xato qilishi mumkin; muhim javobni dars materiali yoki ustoz bilan tekshiring.
 
-Keyingi bosqich: email tasdiqlash/parol tiklash, bildirishnomalar, audit jurnali, katta kontent kutubxonasi va ko‘p serverli deploy. Murakkab do‘kon, turnir va nishonlar MVP doirasiga kiritilmagan.
+Keyingi bosqich: email tasdiqlash/parol tiklash, bildirishnomalar, audit jurnali, katta kontent kutubxonasi va production observability. Murakkab do‘kon, turnir va nishonlar MVP doirasiga kiritilmagan.
 
 ## Papkalar
 
 ```text
-database/             SQLite migratsiyasi
+database/             SQLite va PostgreSQL migratsiyalari
 scripts/              Setup, migratsiya, seed va admin CLI
 src/app/              Sahifalar va Node.js API route
 src/components/       Kabinetlar, dars, laboratoriya, test va Focus
